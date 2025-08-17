@@ -12,8 +12,12 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # === Caminhos fixos (editáveis) ===
-PDF_PATH = Path(r"C:\Users\Milson Yuji Aoki\OneDrive - Universidade Federal do ABC\Dev_yuji\ACADEMICO\UFABC\2° QUAD\BECM\3 - Danilo Marcondes\Danilo Marcondes .pdf")
-OUTPUT_PATH = Path(r"C:\Users\Milson Yuji Aoki\OneDrive - Universidade Federal do ABC\Dev_yuji\ACADEMICO\UFABC\2° QUAD\BECM\3 - Danilo Marcondes\danilo marcondes.txt")
+PDF_PATH = Path(r"C:\Users\milso\OneDrive - Universidade Federal do ABC\Dev_yuji\ACADEMICO\UFABC\2° QUAD\BECM\4 e 5 - Ceticismo\4 - Andre Verdan\Andre Verdan.pdf")
+OUTPUT_PATH = Path(r"C:\Users\milso\OneDrive - Universidade Federal do ABC\Dev_yuji\ACADEMICO\UFABC\2° QUAD\BECM\4 e 5 - Ceticismo\4 - Andre Verdan\Andre Verdan.txt")
+
+# Variáveis globais para armazenar o assistente e a thread
+assistant = None
+thread = None
 
 def load_api_key(env_var: str = "OPENAI_API_KEY") -> None:
     """Carrega a chave da API do .env e configura o cliente OpenAI."""
@@ -36,21 +40,39 @@ def upload_file_to_openai(client: OpenAI, file_path: Path) -> str:
         logger.error(f"Falha ao enviar arquivo: {e}")
         raise
 
-def request_response_for_file(client: OpenAI, file_id: str, prompt: str, model: str = "gpt-4o") -> str:
-    """Solicita ao modelo que processe o PDF enviado."""
-    logger.info("Solicitando resposta da OpenAI para arquivo enviado")
-    try:
-        # Cria um assistant para processar o arquivo
+def get_or_create_assistant(client: OpenAI, model: str = "gpt-4o") -> OpenAI.Assistant:
+    """Obtém ou cria um assistente para processar PDFs."""
+    global assistant
+    if assistant is None:
+        logger.info("Criando um novo assistente.")
         assistant = client.beta.assistants.create(
             name="PDF Extractor",
             instructions="Você é um assistente que extrai texto de documentos PDF.",
             model=model,
             tools=[{"type": "file_search"}]
         )
-        
-        # Cria uma thread
+    else:
+        logger.info("Reutilizando o assistente existente.")
+    return assistant
+
+def get_or_create_thread(client: OpenAI) -> OpenAI.Thread:
+    """Obtém ou cria uma thread para o processamento."""
+    global thread
+    if thread is None:
+        logger.info("Criando uma nova thread.")
         thread = client.beta.threads.create()
-        
+    else:
+        logger.info("Reutilizando a thread existente.")
+    return thread
+
+def request_response_for_file(client: OpenAI, file_id: str, prompt: str, model: str = "gpt-4o") -> str:
+    """Solicita ao modelo que processe o PDF enviado."""
+    logger.info("Solicitando resposta da OpenAI para arquivo enviado")
+    try:
+        # Obtém ou cria o assistente e a thread
+        assistant = get_or_create_assistant(client, model)
+        thread = get_or_create_thread(client)
+
         # Adiciona mensagem com o arquivo
         client.beta.threads.messages.create(
             thread_id=thread.id,
@@ -58,19 +80,19 @@ def request_response_for_file(client: OpenAI, file_id: str, prompt: str, model: 
             content=prompt,
             attachments=[{"file_id": file_id, "tools": [{"type": "file_search"}]}]
         )
-        
+
         # Executa o assistant
         run = client.beta.threads.runs.create(
             thread_id=thread.id,
             assistant_id=assistant.id
         )
-        
+
         # Aguarda a conclusão
         import time
         while run.status in ['queued', 'in_progress']:
             time.sleep(1)
             run = client.beta.threads.runs.retrieve(thread_id=thread.id, run_id=run.id)
-        
+
         if run.status == 'completed':
             messages = client.beta.threads.messages.list(thread_id=thread.id)
             response_message = messages.data[0]
@@ -82,7 +104,7 @@ def request_response_for_file(client: OpenAI, file_id: str, prompt: str, model: 
             return str(response_message.content[0])
         else:
             raise Exception(f"Run falhou com status: {run.status}")
-            
+
     except Exception as e:
         logger.error(f"Erro na chamada à API: {e}")
         raise
